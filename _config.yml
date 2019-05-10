@@ -153,9 +153,6 @@ footer:
     - label: "Instagram"
       icon: "fab fa-fw fa-instagram"
       # url:
-header:
-  overlay_image: /assets/header-photo.jpg
-  overlay_filter: 0.5
 
 # Reading Files
 include:
