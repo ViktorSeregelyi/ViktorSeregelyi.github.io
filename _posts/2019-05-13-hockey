@@ -1,0 +1,148 @@
+---
+title: "Predicting NHL Player Salaries"
+date: 2019-05-13
+tags: [Machine Learning, R]
+excerpt: "Predicting National Hockey League player salaries based on player characteristics and performance statistics"
+---
+
+## Objective:
+
+Perhaps one of the most important factors to an NHL team’s success, both on and off the ice, is in its allocation of money towards individual player contracts. In terms of on-ice performance, a successful team must not only maximize the quality of its players, but do so against the NHL’s team salary cap constraint. The salary cap is a hard cap on the upper limit of each individual team’s player payroll, and is currently set at US$79.5 million. Awarding overly generous contracts to some players therefore jeopardizes a teams’ chance at success, as there will be less money available to sign other talented players.
+A team’s financial success also depends on player contracts as these contracts represent an expense for teams that should be minimized subject to a certain desired level of overall player talent on the team in order to maximize profit. A players’ intrinsic worth is therefore a crucial piece of information for a NHL team as it will determine the optimal size of contract that each player should be awarded; unfortunately, a players’ exact worth is often quite subjective, and always difficult to ascertain.
+Let's see if we can use machine learning techniques to predict player salaries based on player characteristics and performance measures in 2016-2017 NHL season.
+
+## Analysis:
+
+Load the required packages and the data, which is from http://www.hockeyabstract.com
+
+I've already done a little bit of data cleaning in Excel (removing extra titles/headings, formatting, etc) to make the dataset more readable by R.
+
+```r
+library(mlbench)
+library(caret)
+library(glmnet)
+library(neuralnet)
+library(party)
+
+setwd("C:\\Users\\Viktor\\Desktop")
+dat = read.csv("NHL_2016-17_Cleaned.csv", header = T)
+dat = na.omit(dat)
+```
+There are 153 columns in our dataset, so we have lots of variables to analyze for our 873 players who played at least one NHL game that season. Unforunately, many of these variables will not be useful. We can start off by removing any categorical variables with too many categories (like city of birth and team) as well as variables that we know shouldn't factor into salaries (like first and last name). We can also remove variables that are perfectly or highly correlated (like time on ice in seconds and time on ice in minutes).
+
+After narrowing down our dataset a little bit, we can take a look at the summary stats for some of the key variables left over to give us an idea of what we're going to be working with.
+
+```r
+subdat = dat[,c(1,5,6,12:14,17:20,24,27,36,38,42,50,57,145,152)]
+sumstat = sapply(subdat, mean)
+
+sumstat = data.frame("Statistic" = colnames(subdat),
+                     "Mean" = sapply(subdat, mean), 
+                     "Median" = sapply(subdat, median), 
+                     "Standard Deviation" = sapply(subdat, sd),
+                     "Minimum" = sapply(subdat, min),
+                     "Maximum" = sapply(subdat, max))
+sumstat
+```
+![alt]({{ site.url }}{{ site.baseurl }}/assets/post-photos-nhl1/sum-stats.JPG)
+
+The salary variable, which is what we'll try to predict, is each player’s salary in USD in the 2016-2017 NHL season. It ranged from a low of $575,000 to a high of $14,000,000 with a mean of $2,351,415 and a median of $950,000.
+
+To prevent overfitting, we'll likely need to cut down the number of features in our model a bit further. We can use recursive feature elimination for this.
+
+```r
+#Divide into training and test sets
+set.seed(42)
+idx = createDataPartition(subdat$Salary, p = 0.8, list = FALSE)
+dat_trn = subdat[idx, ]
+dat_tst = subdat[-idx, ]
+
+# do feature selection using a random forest selection function
+control <- rfeControl(functions=rfFuncs, method="cv", number=5)
+results <- rfe(dat_trn[,c(1:18)], dat_trn[,19],
+               sizes=c(1:10), rfeControl=control)
+print(results)
+# the chosen features
+predictors(results)
+plot(results, type=c("g", "o"))
+
+```
+![alt]({{ site.url }}{{ site.baseurl }}/assets/post-photos-nhl1/RFE.jpeg)
+
+The random forest RFE revealed that RMSE was minimized when nine variables were included in the model. The nine chosen variables were: age, time on ice per game played, individual shot attempts, individual unblocked shots, assists, points, shots blocked, games played, and expected goals.
+
+With the optimal number of variables determined, we can now centre and scale our data and feed these features into some predictive models. Let's test out six different models, just for fun to see how they stack up against each other for this dataset. We would probably get slightly better results if we determined the optimal subset of features for each different model individually rather than using the same set from our RFE for each one, but using the same inputs for each will save a lot of time and make our lives much easier.
+
+```r
+#Create subset of dataset using the optimal selection of features
+dat_trn = dat_trn[,c(19, 1, 11, 6, 4, 14, 13, 7, 15, 17)]
+dat_tst = dat_tst[,c(19, 1, 11, 6, 4, 14, 13, 7, 15, 17)]
+
+# centre and scale inputs, which will matter for some of our models
+dat_trn$Age <- scales::rescale(dat_trn$Age, to=c(0,1))
+dat_trn$TOI.GP <- scales::rescale(dat_trn$TOI.GP, to=c(0,1))
+dat_trn$A <- scales::rescale(dat_trn$A, to=c(0,1))
+dat_trn$iCF <- scales::rescale(dat_trn$iCF, to=c(0,1))
+dat_trn$iFF <- scales::rescale(dat_trn$iFF, to=c(0,1))
+dat_trn$PTS <- scales::rescale(dat_trn$PTS, to=c(0,1))
+dat_trn$iBLK <- scales::rescale(dat_trn$iBLK, to=c(0,1))
+dat_trn$GP <- scales::rescale(dat_trn$GP, to=c(0,1))
+dat_trn$ixG <- scales::rescale(dat_trn$ixG, to=c(0,1))
+
+dat_tst$Age <- scales::rescale(dat_tst$Age, to=c(0,1))
+dat_tst$TOI.GP <- scales::rescale(dat_tst$TOI.GP, to=c(0,1))
+dat_tst$A <- scales::rescale(dat_tst$A, to=c(0,1))
+dat_tst$iCF <- scales::rescale(dat_tst$iCF, to=c(0,1))
+dat_tst$iFF <- scales::rescale(dat_tst$iFF, to=c(0,1))
+dat_tst$PTS <- scales::rescale(dat_tst$PTS, to=c(0,1))
+dat_tst$iBLK <- scales::rescale(dat_tst$iBLK, to=c(0,1))
+dat_tst$GP <- scales::rescale(dat_tst$GP, to=c(0,1))
+dat_tst$ixG <- scales::rescale(dat_tst$ixG, to=c(0,1))
+
+x_train = dat_trn[,c(2:10)]
+x_test = dat_tst[,c(2:10)]
+
+y_train = dat_trn[,c(1)]
+y_test = dat_tst[,c(1)]
+```
+We'll use cross-validation to train most of our models, except for the random forest which will use out-of-bag error (OOB will give the same result, it's just faster).
+
+```r
+cv_5 = trainControl(method = "cv", number = 5)
+oob = trainControl(method = "oob", number = 5)
+
+```
+
+The first two models we'll use  will be support vector regressions (SVR), which is a variation of the support vector machine (SVM) training algorithm. A SVM is a binary linear classifier that seeks to draw a line that separates the points of two different categories in feature space. Nonlinear models can also be created using the kernel trick, which involves the use of a non-linear kernel function to transform data into a higher-dimensional feature space, where classes will then be linearly separable.
+
+Let's use one SVR with a linear kernel and a second SVR using the kernel trick and a radial basis function kernel to see how they compare.
+
+```r
+linGrid = expand.grid(C = c(2^ (-5:5)))
+SVM_Lin = train(x_train, y_train,
+                method="svmLinear", tuneGrid= linGrid,
+                trControl = cv_5)
+SVM_Lin
+sqrt((mean((predict(SVM_Lin, x_test) - y_test)^2)))
+
+
+radGrid = expand.grid(sigma= 2^c(-25, -20, -15,-10, -5, 0), C= 2^c(0:5))
+SVM_Rad = train(x_train, y_train,
+                method="svmRadial", tuneGrid= radGrid,
+                trControl = cv_5)
+SVM_Rad
+sqrt((mean((predict(SVM_Rad, x_test) - y_test)^2)))
+
+```
+Next, let's use a k-nearest neighbours model. This is a non-parametric method that, in the case of regression, predicts an output for a point by averaging the values of the k points nearest to the point of interest in feature space. Distance for a KNN model in feature space is generally calculated using Euclidian distances, but other distance metrics can be used as well. A number of different values for k can be fed into the model, and during training the value that provides the most accurate predictions can be learned and used later in testing. 
+
+```r
+k_set = data.frame(k=c(1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25))
+knn = train(x_train, y_train,
+            method="knn", tuneGrid= k_set,
+            trControl = cv_5)
+knn
+sqrt((mean((predict(knn, x_test) - y_test)^2)))
+
+```
+
